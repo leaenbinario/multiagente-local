@@ -1,0 +1,115 @@
+# Multiagente local
+
+Ecosistema local de agentes inteligentes para asistencia operativa, informática forense, gestión de causas judiciales y memoria de trabajo, con foco fuerte en privacidad, control local de la información y crecimiento modular.
+
+## Objetivo
+
+Este proyecto busca construir un sistema multiagente que funcione en infraestructura propia, evitando exponer datos sensibles de causas, clientes, escritos, transcripciones y memoria de trabajo a servicios externos por defecto.
+
+## Principios
+
+- Todo local por defecto.
+- Modelos servidos por Ollama.
+- Base vectorial local con ChromaDB.
+- Docker Compose como mecanismo principal de despliegue.
+- Separación por dominios lógicos.
+- Privacidad y trazabilidad como criterios centrales.
+- Evolución gradual por fases y ramas.
+
+## Componentes principales
+
+- `api-multiagente`: backend principal, orquestación, compatibilidad OpenAI, routing, memoria y acceso a agentes.
+- `openclaw-causas`: servicio para gestión de causas, historial, contactos, resúmenes y mensajes sugeridos.
+- `whisper-worker`: transcripción bajo demanda de audio y video.
+- `ollama`: inferencia local de modelos y embeddings.
+- `chromadb`: almacenamiento vectorial para RAG.
+- `open-webui`: interfaz web de chat sobre el backend local.
+
+## Arquitectura general
+
+Flujo base del sistema:
+
+1. El usuario consulta desde Open WebUI o un cliente propio.
+2. `api-multiagente` detecta intención y deriva.
+3. Según el caso, responde un agente especializado o `openclaw-causas`.
+4. Si hace falta contexto documental, consulta colecciones en ChromaDB.
+5. Ollama genera la respuesta usando el modelo local configurado.
+6. La respuesta vuelve al cliente con contenido y, cuando aplica, fuentes internas.
+
+## Estructura del proyecto
+
+```text
+.
+├── README.md
+├── .gitignore
+├── env.example
+├── docker-compose.yml
+├── bench_multiagente.sh
+├── api-multiagente/
+├── openclaw-causas/
+├── whisper-worker/
+└── docs/
+```
+
+## Servicios actuales
+
+- API Multiagente: puerto host `9000`
+- Open WebUI: puerto host `3000`
+- Ollama: puerto host `11434`
+- ChromaDB: puerto host `8000`
+- OpenClaw Causas: puerto configurable por entorno
+- Whisper Worker: bajo demanda, sin exposición pública directa
+
+## Variables de entorno
+
+Copiá `env.example` a `.env` y ajustá los valores según tu entorno local.
+
+```bash
+cp env.example .env
+```
+
+## Arranque local
+
+```bash
+docker compose up -d --build
+```
+
+## Verificación
+
+```bash
+docker compose ps
+docker compose logs -f api-multiagente
+docker compose logs -f openclaw-causas
+docker compose logs -f ollama
+```
+
+## Flujo Git
+
+- `main`: estable, producción local o release.
+- `develop`: integración y pruebas.
+- `feature/...`: nuevas funciones o mejoras puntuales.
+- `fix/...`: correcciones pequeñas.
+
+## Reglas de trabajo
+
+- No hacer commits directos a `main`.
+- No subir `.env`, secretos ni datos reales.
+- No versionar documentos sensibles, transcripciones ni volúmenes persistentes.
+- Hacer commits chicos y descriptivos.
+- Probar en `develop` antes de pasar a `main`.
+
+## Privacidad
+
+Este sistema está pensado para uso local. Los datos sensibles de clientes, causas judiciales, escritos, evidencias, memoria y transcripciones deben permanecer bajo control del entorno propio, salvo configuración explícita en contrario.
+
+## Estado actual
+
+La base del repositorio ya está versionada en GitHub y esta etapa prepara la organización del proyecto para la modularización del backend.
+
+## Próximos pasos
+
+- Ordenar documentación técnica en `docs/`
+- Consolidar `env.example`
+- Modularizar el backend multiagente
+- Separar configuración, routing, agentes y RAG
+- Formalizar releases con tags
