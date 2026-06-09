@@ -1,8 +1,10 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
 from typing import List, Optional
 
+from fastapi import APIRouter
+from pydantic import BaseModel
+
 from app.config.settings import settings
+from app.services.routing_service import enrutar_consulta
 
 router = APIRouter()
 
@@ -15,6 +17,16 @@ class Message(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = None
     messages: List[Message]
+
+
+def _resolver_respuesta_stub(destino: str, user_message: str) -> str:
+    if destino == "forense":
+        return f"[forense] Consulta recibida: {user_message}"
+    if destino == "contador":
+        return f"[contador] Consulta recibida: {user_message}"
+    if destino == "memoria":
+        return f"[memoria] Consulta recibida: {user_message}"
+    return f"[asistente] Consulta recibida: {user_message}"
 
 
 @router.get("/v1/models")
@@ -39,6 +51,9 @@ def list_models_alias():
 @router.post("/v1/chat/completions")
 def chat_completions(payload: ChatCompletionRequest):
     user_message = payload.messages[-1].content if payload.messages else ""
+    destino = enrutar_consulta(user_message)
+    respuesta = _resolver_respuesta_stub(destino, user_message)
+
     return {
         "id": "chatcmpl-local",
         "object": "chat.completion",
@@ -49,11 +64,14 @@ def chat_completions(payload: ChatCompletionRequest):
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": f"Stub OK. Mensaje recibido: {user_message}"
+                    "content": respuesta
                 },
                 "finish_reason": "stop"
             }
-        ]
+        ],
+        "debug": {
+            "destino": destino
+        }
     }
 
 
