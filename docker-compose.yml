@@ -1,0 +1,136 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ./volumes/ollama:/root/.ollama
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_KEEP_ALIVE=5m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/11434'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMA_PORT_HOST:-8000}:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/data
+    volumes:
+      - ./volumes/chromadb:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  openclaw-causas:
+    build:
+      context: ./openclaw-causas
+      dockerfile: Dockerfile
+    container_name: openclaw-causas
+    restart: unless-stopped
+    ports:
+      - "${OPENCLAW_CAUSAS_PORT:-9100}:9100"
+    volumes:
+      - ./shared-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/').read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api-multiagente:
+    build:
+      context: ./api-multiagente
+      dockerfile: Dockerfile
+    container_name: api-multiagente
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-9000}:9000"
+    volumes:
+      - ./api-multiagente:/app
+      - ./shared-data:/shared-data
+    env_file:
+      - ./api-multiagente/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - API_HOST=0.0.0.0
+      - API_PORT=9000
+      - OPENCLAW_CAUSAS_URL=http://openclaw-causas:9100
+    depends_on:
+      ollama:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      openclaw-causas:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/').read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "${OPENWEBUI_PORT:-3000}:8080"
+    volumes:
+      - ./volumes/open-webui:/app/backend/data
+    environment:
+      - OPENAI_API_BASE_URL=http://api-multiagente:9000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-dummy-key}
+    depends_on:
+      api-multiagente:
+        condition: service_healthy
+
+  whisper-worker:
+    build:
+      context: ./whisper-worker
+    container_name: whisper-worker
+    restart: "no"
+    profiles:
+      - whisper
+    environment:
+      - INPUT_DIR=/entradas
+      - OUT_DIR=/transcripciones
+      - TMP_DIR=/tmp/whisper
+      - WHISPER_MODEL=medium
+      - WHISPER_LANGUAGE=es
+      - DELETE_SOURCE_AFTER_SUCCESS=false
+    volumes:
+      - ./shared-data/entradas:/entradas
+      - ./shared-data/transcripciones:/transcripciones
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
