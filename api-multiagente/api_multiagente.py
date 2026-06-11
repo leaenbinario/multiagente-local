@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-from typing import List, Optional, Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from uuid import uuid4
 from contextlib import asynccontextmanager
 import json
-import time
-import os
-import math
 import logging
+import math
+import os
 import re
+import time
 
 import requests
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-import agente_forense as af
 import agente_asistente as aa
 import agente_contador as ac
+import agente_forense as af
 
 load_dotenv()
 
@@ -40,8 +40,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text:latest")
 OPENCLAW_CAUSAS_URL = os.getenv("OPENCLAW_CAUSAS_URL", "http://openclaw-causas:9100")
 
-UMBRAL_MINIMO_ROUTING = float(os.getenv("ROUTING_MIN_SCORE", "0.35"))
-DIFERENCIA_MINIMA_ROUTING = float(os.getenv("ROUTING_MIN_DIFF", "0.03"))
+ROUTING_MIN_SCORE = float(os.getenv("ROUTING_MIN_SCORE", "0.35"))
+ROUTING_MIN_DIFF = float(os.getenv("ROUTING_MIN_DIFF", "0.03"))
 DEFAULT_N_RESULTADOS = int(os.getenv("DEFAULT_N_RESULTADOS", "4"))
 
 
@@ -152,7 +152,7 @@ class ContactoCreateRequest(BaseModel):
     resultado: Optional[str] = None
 
 
-DOMINIOS_SEMANTICOS = {
+DOMINIOS_SEMANTICOS: Dict[str, List[str]] = {
     "forense": [
         "qué es la cadena de custodia",
         "cómo preservar evidencia digital",
@@ -208,8 +208,8 @@ async def lifespan(app: FastAPI):
     try:
         precalcular_embeddings_dominios()
         logger.info("Embeddings de dominios precalculados.")
-    except Exception as e:
-        logger.exception("Error precalculando embeddings de dominios: %s", e)
+    except Exception as exc:
+        logger.exception("Error precalculando embeddings de dominios: %s", exc)
     yield
     logger.info("Cerrando API Multiagente...")
 
@@ -268,7 +268,7 @@ def memoria_buscar_items(consulta: str) -> List[dict]:
 
 def _formatear_recuerdos(recuerdos: List[dict]) -> str:
     return "Memoria encontrada:\n" + "\n".join(
-        [f"- {r['clave']}: {r['valor']}" for r in recuerdos]
+        f"- {r['clave']}: {r['valor']}" for r in recuerdos
     )
 
 
@@ -276,33 +276,48 @@ def _normalizar_respuesta(respuesta: Any, fuentes: Any) -> Tuple[str, List[str]]
     texto = str(respuesta).strip() if respuesta is not None else ""
 
     if not isinstance(fuentes, list):
-        fuentes = [str(fuentes)] if fuentes else []
+        fuentes_norm = [str(fuentes)] if fuentes else []
     else:
-        fuentes = [str(f) for f in fuentes if str(f).strip()]
+        fuentes_norm = [str(f) for f in fuentes if str(f).strip()]
 
-    return texto, fuentes
+    return texto, fuentes_norm
 
 
-def consultar_forense(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS) -> Tuple[str, List[str]]:
+def consultar_forense(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, List[str]]:
     respuesta, fuentes = af.agente_forense(pregunta, n_resultados)
     return _normalizar_respuesta(respuesta, fuentes)
 
 
-def consultar_operativa(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS) -> Tuple[str, List[str]]:
+def consultar_operativa(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, List[str]]:
     respuesta, fuentes = aa.agente_asistente(pregunta, n_resultados)
     return _normalizar_respuesta(respuesta, fuentes)
 
 
-def consultar_honorarios(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS) -> Tuple[str, List[str]]:
+def consultar_honorarios(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, List[str]]:
     respuesta, fuentes = ac.agente_contador(pregunta, n_resultados)
     return _normalizar_respuesta(respuesta, fuentes)
 
 
-def consultar_asistente(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS) -> Tuple[str, List[str]]:
+def consultar_asistente(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, List[str]]:
     return consultar_operativa(pregunta, n_resultados)
 
 
-def consultar_contador(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS) -> Tuple[str, List[str]]:
+def consultar_contador(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, List[str]]:
     return consultar_honorarios(pregunta, n_resultados)
 
 
@@ -313,7 +328,7 @@ def consultar_memoria(pregunta: str) -> Tuple[str, List[str]]:
     return "", []
 
 
-def _request_embedding(texto: str) -> List[float]:
+def request_embedding(texto: str) -> List[float]:
     url = f"{OLLAMA_BASE_URL}/api/embeddings"
     resp = requests.post(
         url,
@@ -332,18 +347,18 @@ def similitud_coseno(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a) != len(b):
         return -1.0
     dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
+    norma_a = math.sqrt(sum(x * x for x in a))
+    norma_b = math.sqrt(sum(y * y for y in b))
+    if norma_a == 0 or norma_b == 0:
         return -1.0
-    return dot / (na * nb)
+    return dot / (norma_a * norma_b)
 
 
 def precalcular_embeddings_dominios() -> None:
     global EMBEDDINGS_DOMINIOS
     tmp: Dict[str, List[List[float]]] = {}
     for dominio, ejemplos in DOMINIOS_SEMANTICOS.items():
-        tmp[dominio] = [_request_embedding(ejemplo) for ejemplo in ejemplos]
+        tmp[dominio] = [request_embedding(ejemplo) for ejemplo in ejemplos]
     EMBEDDINGS_DOMINIOS = tmp
 
 
@@ -351,7 +366,7 @@ def clasificar_dominio(pregunta: str) -> Tuple[str, float, float]:
     if not EMBEDDINGS_DOMINIOS:
         precalcular_embeddings_dominios()
 
-    emb_pregunta = _request_embedding(pregunta)
+    emb_pregunta = request_embedding(pregunta)
     scores: Dict[str, float] = {}
 
     for dominio, embeddings in EMBEDDINGS_DOMINIOS.items():
@@ -364,7 +379,7 @@ def clasificar_dominio(pregunta: str) -> Tuple[str, float, float]:
     return mejor_dominio, mejor_score, segundo_score
 
 
-def _request_openclaw(
+def request_openclaw(
     method: str,
     path: str,
     payload: Optional[dict] = None,
@@ -393,15 +408,43 @@ def _request_openclaw(
 
     except HTTPException:
         raise
-    except requests.RequestException as e:
+    except requests.RequestException as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Error consultando openclaw-causas: {str(e)}"
+            detail=f"Error consultando openclaw-causas: {str(exc)}",
         )
 
 
+def listar_causas_openclaw():
+    return request_openclaw("GET", "/causas")
+
+
+def buscar_causas_openclaw(params: dict):
+    return request_openclaw("GET", "/causas/buscar", params=params)
+
+
+def obtener_causa_openclaw(id_causa: str):
+    return request_openclaw("GET", f"/causas/{id_causa}")
+
+
+def crear_causa_openclaw(payload: dict):
+    return request_openclaw("POST", "/causas", payload=payload)
+
+
+def actualizar_causa_openclaw(id_causa: str, payload: dict):
+    return request_openclaw("PUT", f"/causas/{id_causa}", payload=payload)
+
+
+def registrar_contacto_openclaw(id_causa: str, payload: dict):
+    return request_openclaw("POST", f"/causas/{id_causa}/contactos", payload=payload)
+
+
+def obtener_historial_openclaw(id_causa: str):
+    return request_openclaw("GET", f"/causas/{id_causa}/historial")
+
+
 def consultar_resumen_causa_openclaw(id_causa: str):
-    return _request_openclaw("GET", f"/causas/{id_causa}/resumen")
+    return request_openclaw("GET", f"/causas/{id_causa}/resumen")
 
 
 def sugerir_email_causa_openclaw(
@@ -409,7 +452,7 @@ def sugerir_email_causa_openclaw(
     motivo: str = "seguimiento",
     tono: str = "profesional_cercano",
 ):
-    return _request_openclaw(
+    return request_openclaw(
         "POST",
         "/causas/sugerir-email",
         payload={
@@ -425,7 +468,7 @@ def sugerir_whatsapp_causa_openclaw(
     motivo: str = "seguimiento",
     tono: str = "profesional_cercano",
 ):
-    return _request_openclaw(
+    return request_openclaw(
         "POST",
         "/causas/sugerir-whatsapp",
         payload={
@@ -434,181 +477,6 @@ def sugerir_whatsapp_causa_openclaw(
             "tono": tono,
         },
     )
-
-
-def listar_causas_openclaw():
-    return _request_openclaw("GET", "/causas")
-
-
-def buscar_causas_openclaw(params: dict):
-    return _request_openclaw("GET", "/causas/buscar", params=params)
-
-
-def obtener_causa_openclaw(id_causa: str):
-    return _request_openclaw("GET", f"/causas/{id_causa}")
-
-
-def crear_causa_openclaw(payload: dict):
-    return _request_openclaw("POST", "/causas", payload=payload)
-
-
-def actualizar_causa_openclaw(id_causa: str, payload: dict):
-    return _request_openclaw("PUT", f"/causas/{id_causa}", payload=payload)
-
-
-def registrar_contacto_openclaw(id_causa: str, payload: dict):
-    return _request_openclaw("POST", f"/causas/{id_causa}/contactos", payload=payload)
-
-
-def obtener_historial_openclaw(id_causa: str):
-    return _request_openclaw("GET", f"/causas/{id_causa}/historial")
-
-
-def _extraer_id_causa_desde_texto(pregunta: str) -> Optional[str]:
-    patrones = [
-        r"\b(id_causa)\s*[:=]\s*([A-Za-z0-9_-]+)\b",
-        r"\b(causa|expediente)\s+([A-Za-z0-9][A-Za-z0-9_-]*)\b",
-    ]
-
-    for patron in patrones:
-        m = re.search(patron, pregunta, re.IGNORECASE)
-        if m:
-            if m.lastindex and m.lastindex >= 2:
-                return m.group(2)
-            if m.lastindex == 1:
-                return m.group(1)
-
-    m = re.search(r"\b([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)\b", pregunta)
-    if m:
-        return m.group(1)
-
-    return None
-
-
-def detectar_intencion_causas(pregunta: str) -> Optional[str]:
-    p = pregunta.lower().strip()
-
-    if any(k in p for k in [
-        "creá la causa", "crea la causa", "crear causa", "nueva causa",
-        "alta de causa", "registrar causa"
-    ]):
-        return "crear_causa"
-
-    if any(k in p for k in [
-        "actualizá la causa", "actualiza la causa", "actualizar causa",
-        "editar causa", "modificar causa"
-    ]):
-        return "actualizar_causa"
-
-    if any(k in p for k in [
-        "registrá un contacto", "registra un contacto", "registrar contacto",
-        "agregar contacto", "nuevo contacto"
-    ]):
-        return "registrar_contacto"
-
-    if any(k in p for k in [
-        "mostrame el historial", "muéstrame el historial",
-        "ver historial", "historial de la causa"
-    ]):
-        return "obtener_historial"
-
-    if any(k in p for k in [
-        "mostrame la causa", "muéstrame la causa",
-        "mostrar la causa", "mostrar causa",
-        "ver la causa", "ver causa",
-        "detalle de la causa", "detalle causa",
-        "ficha de la causa", "ficha causa"
-    ]):
-        return "obtener_causa"
-
-    if any(k in p for k in [
-        "resumen de la causa", "resumen de causa",
-        "resumí la causa", "resumi la causa",
-        "ver resumen", "resumen causa"
-    ]):
-        return "resumen_causa"
-
-    if any(k in p for k in [
-        "sugerime un whatsapp", "sugiéreme un whatsapp",
-        "generame un whatsapp", "genera un whatsapp",
-        "borrador de whatsapp", "mensaje de whatsapp",
-        "whatsapp de seguimiento"
-    ]):
-        return "sugerir_whatsapp"
-
-    if any(k in p for k in [
-        "sugerime un email", "sugiéreme un email",
-        "generame un email", "genera un email",
-        "borrador de email", "mail de seguimiento",
-        "email de seguimiento"
-    ]):
-        return "sugerir_email"
-
-    if any(k in p for k in [
-        "listá causas", "lista causas", "listar causas",
-        "mostrame causas", "muéstrame causas", "mis causas"
-    ]):
-        return "listar_causas"
-
-    if any(k in p for k in [
-        "buscá causas", "busca causas", "buscar causas",
-        "filtrá causas", "filtra causas"
-    ]):
-        return "buscar_causas"
-
-    return None
-
-
-def extraer_caratula(pregunta: str) -> Optional[str]:
-    patrones = [
-        r"(?:carátula|caratula)\s*[:=]\s*(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
-        r"(?:para|con)\s+carátula\s+(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
-        r"(?:para|con)\s+caratula\s+(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
-    ]
-    for patron in patrones:
-        m = re.search(patron, pregunta, re.IGNORECASE)
-        if m:
-            return m.group(1).strip().strip('"').strip("'")
-    return None
-
-
-def extraer_canal(pregunta: str) -> Optional[str]:
-    p = pregunta.lower()
-    for canal in ["email", "correo", "whatsapp", "llamada", "telefono", "teléfono", "presencial"]:
-        if canal in p:
-            return "email" if canal in ["email", "correo"] else ("telefono" if canal in ["telefono", "teléfono"] else canal)
-    return None
-
-
-def extraer_motivo(pregunta: str) -> str:
-    p = pregunta.lower()
-    if "seguimiento" in p:
-        return "seguimiento"
-    if "recordatorio" in p:
-        return "recordatorio"
-    if "consulta" in p:
-        return "consulta"
-    return "seguimiento"
-
-
-def extraer_tono(pregunta: str) -> str:
-    p = pregunta.lower()
-    if "formal" in p:
-        return "formal"
-    if "cercano" in p or "amable" in p:
-        return "profesional_cercano"
-    return "profesional_cercano"
-
-
-def extraer_estado_actual(pregunta: str) -> Optional[str]:
-    m = re.search(
-        r"estado\s*[:=]\s*([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ _-]+?)(?=\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
-        pregunta,
-        re.IGNORECASE,
-    )
-    if m:
-        return m.group(1).strip()
-    return None
 
 
 def limpiar_markdown_mailto(texto: str) -> str:
@@ -640,34 +508,120 @@ def limpiar_whatsapp(texto: str) -> str:
     texto = texto.replace("(", "").replace(")", "")
     texto = texto.replace("–", "-").replace("—", "-")
     texto = re.sub(r"\s+", " ", texto)
-
     return texto
-
-
-def normalizar_telefono(telefono: str) -> str:
-    if not telefono:
-        return telefono
-
-    telefono = telefono.strip()
-    telefono = telefono.replace("(", "").replace(")", "")
-    telefono = telefono.replace(".", "").replace("-", " ")
-    telefono = re.sub(r"\s+", " ", telefono)
-    telefono = telefono.strip()
-
-    return telefono
 
 
 def normalizar_texto_entrada(pregunta: str) -> str:
     if not pregunta:
         return pregunta
+    return limpiar_markdown_mailto(pregunta)
 
-    pregunta = limpiar_markdown_mailto(pregunta)
-    return pregunta
+
+def extraer_id_causa(pregunta: str) -> Optional[str]:
+    patrones = [
+        r"\bid_causa\s*[:=]\s*([A-Za-z0-9_-]+)\b",
+        r"\b(?:causa|expediente)\s+([A-Za-z0-9][A-Za-z0-9_-]*)\b",
+    ]
+
+    for patron in patrones:
+        m = re.search(patron, pregunta, re.IGNORECASE)
+        if m:
+            return m.group(1)
+
+    m = re.search(r"\b([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)\b", pregunta)
+    if m:
+        return m.group(1)
+
+    return None
+
+
+def detectar_intencion_causas(pregunta: str) -> Optional[str]:
+    p = pregunta.lower().strip()
+
+    mapa = {
+        "crear_causa": [
+            "creá la causa", "crea la causa", "crear causa", "nueva causa",
+            "alta de causa", "registrar causa",
+        ],
+        "actualizar_causa": [
+            "actualizá la causa", "actualiza la causa", "actualizar causa",
+            "editar causa", "modificar causa",
+        ],
+        "registrar_contacto": [
+            "registrá un contacto", "registra un contacto", "registrar contacto",
+            "agregar contacto", "nuevo contacto",
+        ],
+        "obtener_historial": [
+            "mostrame el historial", "muéstrame el historial",
+            "ver historial", "historial de la causa",
+        ],
+        "obtener_causa": [
+            "mostrame la causa", "muéstrame la causa",
+            "mostrar la causa", "mostrar causa",
+            "ver la causa", "ver causa",
+            "detalle de la causa", "detalle causa",
+            "ficha de la causa", "ficha causa",
+        ],
+        "resumen_causa": [
+            "resumen de la causa", "resumen de causa",
+            "resumí la causa", "resumi la causa",
+            "ver resumen", "resumen causa",
+        ],
+        "sugerir_whatsapp": [
+            "sugerime un whatsapp", "sugiéreme un whatsapp",
+            "generame un whatsapp", "genera un whatsapp",
+            "borrador de whatsapp", "mensaje de whatsapp",
+            "whatsapp de seguimiento",
+        ],
+        "sugerir_email": [
+            "sugerime un email", "sugiéreme un email",
+            "generame un email", "genera un email",
+            "borrador de email", "mail de seguimiento",
+            "email de seguimiento",
+        ],
+        "listar_causas": [
+            "listá causas", "lista causas", "listar causas",
+            "mostrame causas", "muéstrame causas", "mis causas",
+        ],
+        "buscar_causas": [
+            "buscá causas", "busca causas", "buscar causas",
+            "filtrá causas", "filtra causas",
+        ],
+    }
+
+    for intencion, claves in mapa.items():
+        if any(k in p for k in claves):
+            return intencion
+
+    return None
+
+
+def extraer_caratula(pregunta: str) -> Optional[str]:
+    patrones = [
+        r"(?:carátula|caratula)\s*[:=]\s*(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
+        r"(?:para|con)\s+carátula\s+(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
+        r"(?:para|con)\s+caratula\s+(.+?)(?=\s+estado\s*[:=]|\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
+    ]
+    for patron in patrones:
+        m = re.search(patron, pregunta, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().strip('"').strip("'")
+    return None
+
+
+def extraer_estado_actual(pregunta: str) -> Optional[str]:
+    m = re.search(
+        r"estado\s*[:=]\s*([A-Za-z0-9ÁÉÍÓÚáéíóúñÑ _-]+?)(?=\s+abogado\s*[:=]|\s+cliente\s*[:=]|\s+email\s*[:=]|\s+whatsapp\s*[:=]|$)",
+        pregunta,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return None
 
 
 def extraer_email(pregunta: str) -> Optional[str]:
     pregunta = limpiar_markdown_mailto(pregunta)
-
     patrones = [
         r"email\s*[:=]\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
         r"correo\s*[:=]\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
@@ -691,28 +645,70 @@ def extraer_whatsapp(pregunta: str) -> Optional[str]:
     return None
 
 
+def extraer_canal(pregunta: str) -> Optional[str]:
+    p = pregunta.lower()
+    for canal in ["email", "correo", "whatsapp", "llamada", "telefono", "teléfono", "presencial"]:
+        if canal in p:
+            if canal in ["email", "correo"]:
+                return "email"
+            if canal in ["telefono", "teléfono"]:
+                return "telefono"
+            return canal
+    return None
+
+
+def extraer_asunto_contacto(pregunta: str) -> Optional[str]:
+    m = re.search(
+        r"asunto\s*[:=]\s*(.+?)(?=\s+nota\s*[:=]|\s+resultado\s*[:=]|$)",
+        pregunta,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip().strip('"').strip("'")
+    return None
+
+
 def extraer_nota_contacto(pregunta: str) -> Optional[str]:
-    m = re.search(r"nota\s*[:=]\s*(.+?)(?=\s+resultado\s*[:=]|\s+asunto\s*[:=]|$)", pregunta, re.IGNORECASE)
+    m = re.search(
+        r"nota\s*[:=]\s*(.+?)(?=\s+resultado\s*[:=]|\s+asunto\s*[:=]|$)",
+        pregunta,
+        re.IGNORECASE,
+    )
     if m:
         return m.group(1).strip().strip('"').strip("'")
     return None
 
 
 def extraer_resultado_contacto(pregunta: str) -> Optional[str]:
-    m = re.search(r"resultado\s*[:=]\s*(.+?)(?=\s+nota\s*[:=]|\s+asunto\s*[:=]|$)", pregunta, re.IGNORECASE)
+    m = re.search(
+        r"resultado\s*[:=]\s*(.+?)(?=\s+nota\s*[:=]|\s+asunto\s*[:=]|$)",
+        pregunta,
+        re.IGNORECASE,
+    )
     if m:
         return m.group(1).strip().strip('"').strip("'")
     return None
 
 
-def extraer_asunto_contacto(pregunta: str) -> Optional[str]:
-    m = re.search(r"asunto\s*[:=]\s*(.+?)(?=\s+nota\s*[:=]|\s+resultado\s*[:=]|$)", pregunta, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().strip('"').strip("'")
-    return None
+def extraer_motivo(pregunta: str) -> str:
+    p = pregunta.lower()
+    if "recordatorio" in p:
+        return "recordatorio"
+    if "consulta" in p:
+        return "consulta"
+    return "seguimiento"
 
 
-def _renderizar_resultado_causas(resultado: Any) -> tuple[str, List[str]]:
+def extraer_tono(pregunta: str) -> str:
+    p = pregunta.lower()
+    if "formal" in p:
+        return "formal"
+    if "cercano" in p or "amable" in p:
+        return "profesional_cercano"
+    return "profesional_cercano"
+
+
+def renderizar_resultado_causas(resultado: Any) -> Tuple[str, List[str]]:
     if resultado is None:
         return "No obtuve respuesta del servicio de causas.", []
 
@@ -724,9 +720,7 @@ def _renderizar_resultado_causas(resultado: Any) -> tuple[str, List[str]]:
 
         if "detail" in resultado and not resultado.get("id_causa"):
             detail = resultado.get("detail")
-            if isinstance(detail, dict):
-                return json.dumps(detail, ensure_ascii=False, indent=2), []
-            if isinstance(detail, list):
+            if isinstance(detail, (dict, list)):
                 return json.dumps(detail, ensure_ascii=False, indent=2), []
             return str(detail), []
 
@@ -780,12 +774,8 @@ def _renderizar_resultado_causas(resultado: Any) -> tuple[str, List[str]]:
 
             primer_item = data[0]
 
-            if (
-                len(data) == 1
-                and isinstance(primer_item, dict)
-                and "id_causa" in primer_item
-            ):
-                return _renderizar_resultado_causas(primer_item)
+            if len(data) == 1 and isinstance(primer_item, dict) and "id_causa" in primer_item:
+                return renderizar_resultado_causas(primer_item)
 
             if isinstance(primer_item, dict) and "timestamp" in primer_item and "action" in primer_item:
                 lineas = ["Historial de la causa:"]
@@ -816,7 +806,7 @@ def _renderizar_resultado_causas(resultado: Any) -> tuple[str, List[str]]:
                     )
                 return "\n".join(lineas), []
 
-            return json.dumps(resultado, ensure_ascii=False, indent=2), []
+        return json.dumps(resultado, ensure_ascii=False, indent=2), []
 
     if isinstance(resultado, list):
         if not resultado:
@@ -824,19 +814,14 @@ def _renderizar_resultado_causas(resultado: Any) -> tuple[str, List[str]]:
         return json.dumps(resultado, ensure_ascii=False, indent=2), []
 
     return str(resultado), []
-    
 
-def enrutar_causa_por_intencion(pregunta: str):
-    pregunta = normalizar_texto_entrada(pregunta)
-    intencion = detectar_intencion_causas(pregunta)
-    if not intencion:
-        return None
 
-    id_causa = _extraer_id_causa_desde_texto(pregunta)
+def ejecutar_intencion_causas(intencion: str, pregunta: str) -> Tuple[str, str, List[str]]:
+    id_causa = extraer_id_causa(pregunta)
 
     if intencion == "listar_causas":
         resultado = listar_causas_openclaw()
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "buscar_causas":
@@ -844,28 +829,28 @@ def enrutar_causa_por_intencion(pregunta: str):
         for token in ["buscá causas", "busca causas", "buscar causas", "filtrá causas", "filtra causas"]:
             q = re.sub(token, "", q, flags=re.IGNORECASE).strip()
         resultado = buscar_causas_openclaw({"q": q} if q else {})
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "obtener_causa":
         if not id_causa:
             return "causas", "Necesito el ID de la causa para mostrarla.", []
         resultado = obtener_causa_openclaw(id_causa)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "obtener_historial":
         if not id_causa:
             return "causas", "Necesito el ID de la causa para consultar el historial.", []
         resultado = obtener_historial_openclaw(id_causa)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "resumen_causa":
         if not id_causa:
             return "causas", "Necesito el ID de la causa para resumirla.", []
         resultado = consultar_resumen_causa_openclaw(id_causa)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "sugerir_email":
@@ -876,7 +861,7 @@ def enrutar_causa_por_intencion(pregunta: str):
             motivo=extraer_motivo(pregunta),
             tono=extraer_tono(pregunta),
         )
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "sugerir_whatsapp":
@@ -887,7 +872,7 @@ def enrutar_causa_por_intencion(pregunta: str):
             motivo=extraer_motivo(pregunta),
             tono=extraer_tono(pregunta),
         )
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "registrar_contacto":
@@ -901,7 +886,7 @@ def enrutar_causa_por_intencion(pregunta: str):
             "resultado": extraer_resultado_contacto(pregunta) or "registrado desde lenguaje natural",
         }
         resultado = registrar_contacto_openclaw(id_causa, payload)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "crear_causa":
@@ -923,7 +908,7 @@ def enrutar_causa_por_intencion(pregunta: str):
             payload["abogado_whatsapp"] = whatsapp
 
         resultado = crear_causa_openclaw(payload)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
     if intencion == "actualizar_causa":
@@ -946,100 +931,105 @@ def enrutar_causa_por_intencion(pregunta: str):
             payload["abogado_whatsapp"] = whatsapp
 
         if not payload:
-            return "causas", "No detecté campos para actualizar. Probá indicando por ejemplo: estado: en análisis, email: x@y.com o whatsapp: +54...", []
+            return (
+                "causas",
+                "No detecté campos para actualizar. Probá indicando por ejemplo: estado: en análisis, email: x@y.com o whatsapp: +54...",
+                [],
+            )
 
         resultado = actualizar_causa_openclaw(id_causa, payload)
-        texto, fuentes = _renderizar_resultado_causas(resultado)
+        texto, fuentes = renderizar_resultado_causas(resultado)
         return "causas", texto, fuentes
 
-    return None
+    return "causas", "No pude interpretar la acción sobre la causa.", []
 
 
-def enrutar_consulta(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS):
+def resolver_consulta_causas_generica(pregunta: str) -> Tuple[str, str, List[str]]:
+    pregunta_l = pregunta.lower()
+    id_causa = extraer_id_causa(pregunta)
+
+    if "historial" in pregunta_l:
+        if not id_causa:
+            return "causas", "Necesito el ID de la causa para consultar el historial.", []
+        resultado = obtener_historial_openclaw(id_causa)
+        texto, fuentes = renderizar_resultado_causas(resultado)
+        return "causas", texto, fuentes
+
+    if "resumen" in pregunta_l:
+        if not id_causa:
+            return "causas", "Necesito el ID de la causa para resumirla.", []
+        resultado = consultar_resumen_causa_openclaw(id_causa)
+        texto, fuentes = renderizar_resultado_causas(resultado)
+        return "causas", texto, fuentes
+
+    if "whatsapp" in pregunta_l:
+        if not id_causa:
+            return "causas", "Necesito el ID de la causa para sugerir el WhatsApp.", []
+        resultado = sugerir_whatsapp_causa_openclaw(
+            id_causa=id_causa,
+            motivo=extraer_motivo(pregunta),
+            tono=extraer_tono(pregunta),
+        )
+        texto, fuentes = renderizar_resultado_causas(resultado)
+        return "causas", texto, fuentes
+
+    if "mail" in pregunta_l or "email" in pregunta_l:
+        if not id_causa:
+            return "causas", "Necesito el ID de la causa para sugerir el email.", []
+        resultado = sugerir_email_causa_openclaw(
+            id_causa=id_causa,
+            motivo=extraer_motivo(pregunta),
+            tono=extraer_tono(pregunta),
+        )
+        texto, fuentes = renderizar_resultado_causas(resultado)
+        return "causas", texto, fuentes
+
+    if id_causa:
+        resultado = obtener_causa_openclaw(id_causa)
+        texto, fuentes = renderizar_resultado_causas(resultado)
+        return "causas", texto, fuentes
+
+    resultado = listar_causas_openclaw()
+    texto, fuentes = renderizar_resultado_causas(resultado)
+    return "causas", texto, fuentes
+
+
+def enrutar_consulta(
+    pregunta: str,
+    n_resultados: int = DEFAULT_N_RESULTADOS,
+) -> Tuple[str, str, List[str]]:
     pregunta = normalizar_texto_entrada(pregunta)
     pregunta_l = pregunta.lower()
 
-    resultado_causas = enrutar_causa_por_intencion(pregunta)
-    if resultado_causas:
-        return resultado_causas
+    intencion_causas = detectar_intencion_causas(pregunta)
+    if intencion_causas:
+        return ejecutar_intencion_causas(intencion_causas, pregunta)
 
     if any(k in pregunta_l for k in ["memoria", "recuerdas", "recordá", "recorda", "guardaste"]):
         respuesta, fuentes = consultar_memoria(pregunta)
         if respuesta.strip():
             return "memoria", respuesta, fuentes
 
-    if any(k in pregunta_l for k in [
-        "causa", "causas", "expediente", "carátula", "caratula",
-        "historial de la causa", "resumen de la causa",
-        "email de seguimiento", "mail de seguimiento",
-        "whatsapp de seguimiento", "detalle de la causa",
-        "ver la causa", "mostrar la causa", "ficha de la causa"
-    ]):
-        id_causa = _extraer_id_causa_desde_texto(pregunta)
-
-        if "historial" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para consultar el historial.", []
-            resultado = obtener_historial_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "resumen" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para resumirla.", []
-            resultado = consultar_resumen_causa_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "whatsapp" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para sugerir el WhatsApp.", []
-            resultado = sugerir_whatsapp_causa_openclaw(
-                id_causa=id_causa,
-                motivo=extraer_motivo(pregunta),
-                tono=extraer_tono(pregunta),
-            )
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "mail" in pregunta_l or "email" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para sugerir el email.", []
-            resultado = sugerir_email_causa_openclaw(
-                id_causa=id_causa,
-                motivo=extraer_motivo(pregunta),
-                tono=extraer_tono(pregunta),
-            )
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if any(k in pregunta_l for k in [
-            "mostrar la causa", "mostrame la causa", "muéstrame la causa",
-            "ver la causa", "ver causa", "detalle de la causa",
-            "ficha de la causa", "detalle causa", "ficha causa"
-        ]):
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para mostrarla.", []
-            resultado = obtener_causa_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if any(k in pregunta_l for k in [
-            "listar causas", "lista causas", "listá causas",
-            "mostrame causas", "muéstrame causas", "mis causas"
-        ]):
-            resultado = listar_causas_openclaw()
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
+    if any(
+        k in pregunta_l
+        for k in [
+            "causa", "causas", "expediente", "carátula", "caratula",
+            "historial de la causa", "resumen de la causa",
+            "email de seguimiento", "mail de seguimiento",
+            "whatsapp de seguimiento", "detalle de la causa",
+            "ver la causa", "mostrar la causa", "ficha de la causa",
+        ]
+    ):
+        return resolver_consulta_causas_generica(pregunta)
 
     try:
         dominio, score, segundo = clasificar_dominio(pregunta)
-    except Exception as e:
-        logger.warning("Fallo clasificación semántica, fallback a operativa: %s", e)
+    except Exception as exc:
+        logger.warning("Fallo clasificación semántica, fallback a operativa: %s", exc)
         respuesta, fuentes = consultar_operativa(pregunta, n_resultados=n_resultados)
         return "operativa", respuesta, fuentes
 
-    if score < UMBRAL_MINIMO_ROUTING or (score - segundo) < DIFERENCIA_MINIMA_ROUTING:
+    if score < ROUTING_MIN_SCORE or (score - segundo) < ROUTING_MIN_DIFF:
         respuesta, fuentes = consultar_operativa(pregunta, n_resultados=n_resultados)
         return "operativa", respuesta, fuentes
 
@@ -1059,52 +1049,10 @@ def enrutar_consulta(pregunta: str, n_resultados: int = DEFAULT_N_RESULTADOS):
         return "operativa", respuesta, fuentes
 
     if dominio == "causas":
-        id_causa = _extraer_id_causa_desde_texto(pregunta)
+        return resolver_consulta_causas_generica(pregunta)
 
-        if "historial" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para consultar el historial.", []
-            resultado = obtener_historial_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "resumen" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para resumirla.", []
-            resultado = consultar_resumen_causa_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "whatsapp" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para sugerir el WhatsApp.", []
-            resultado = sugerir_whatsapp_causa_openclaw(
-                id_causa=id_causa,
-                motivo=extraer_motivo(pregunta),
-                tono=extraer_tono(pregunta),
-            )
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if "mail" in pregunta_l or "email" in pregunta_l:
-            if not id_causa:
-                return "causas", "Necesito el ID de la causa para sugerir el email.", []
-            resultado = sugerir_email_causa_openclaw(
-                id_causa=id_causa,
-                motivo=extraer_motivo(pregunta),
-                tono=extraer_tono(pregunta),
-            )
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        if id_causa:
-            resultado = obtener_causa_openclaw(id_causa)
-            texto, fuentes = _renderizar_resultado_causas(resultado)
-            return "causas", texto, fuentes
-
-        resultado = listar_causas_openclaw()
-        texto, fuentes = _renderizar_resultado_causas(resultado)
-        return "causas", texto, fuentes
+    respuesta, fuentes = consultar_operativa(pregunta, n_resultados=n_resultados)
+    return "operativa", respuesta, fuentes
 
 
 @app.post("/consulta", response_model=ConsultaResponse)
@@ -1114,8 +1062,8 @@ def consulta_agente_legacy(req: ConsultaRequest) -> ConsultaResponse:
         return ConsultaResponse(respuesta=respuesta, fuentes=fuentes)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en consulta legacy: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en consulta legacy: {str(exc)}")
 
 
 @app.post("/forense/consulta", response_model=ConsultaResponse)
@@ -1125,8 +1073,8 @@ def consulta_forense_endpoint(req: ConsultaRequest) -> ConsultaResponse:
         return ConsultaResponse(respuesta=respuesta, fuentes=fuentes)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en agente_forense: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en agente_forense: {str(exc)}")
 
 
 @app.post("/operativa/consulta", response_model=ConsultaResponse)
@@ -1136,8 +1084,8 @@ def consulta_operativa_endpoint(req: ConsultaRequest) -> ConsultaResponse:
         return ConsultaResponse(respuesta=respuesta, fuentes=fuentes)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en agente_operativa: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en agente_operativa: {str(exc)}")
 
 
 @app.post("/honorarios/consulta", response_model=ConsultaResponse)
@@ -1147,8 +1095,8 @@ def consulta_honorarios_endpoint(req: ConsultaRequest) -> ConsultaResponse:
         return ConsultaResponse(respuesta=respuesta, fuentes=fuentes)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en agente_honorarios: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en agente_honorarios: {str(exc)}")
 
 
 @app.post("/asistente/consulta", response_model=ConsultaResponse)
@@ -1166,8 +1114,8 @@ def memoria_guardar_endpoint(req: MemoriaGuardarRequest):
     try:
         memoria_guardar_item(req.clave, req.valor, req.categoria)
         return {"ok": True, "mensaje": "Memoria guardada correctamente."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error guardando memoria: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error guardando memoria: {str(exc)}")
 
 
 @app.post("/memoria/buscar", response_model=MemoriaBuscarResponse)
@@ -1175,8 +1123,8 @@ def memoria_buscar_endpoint(req: MemoriaBuscarRequest):
     try:
         resultados = memoria_buscar_items(req.consulta)
         return MemoriaBuscarResponse(resultados=[MemoriaItem(**r) for r in resultados])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error buscando memoria: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error buscando memoria: {str(exc)}")
 
 
 @app.post("/orquestador/consulta", response_model=OrquestadorResponse)
@@ -1186,8 +1134,8 @@ def orquestador_consulta_endpoint(req: ConsultaRequest):
         return OrquestadorResponse(agente=agente, respuesta=respuesta, fuentes=fuentes)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en orquestador: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en orquestador: {str(exc)}")
 
 
 @app.get("/causas")
@@ -1203,13 +1151,15 @@ def causas_buscar(
     estado: Optional[str] = Query(default=None),
     tag: Optional[str] = Query(default=None),
 ):
-    params = {k: v for k, v in {
-        "q": q,
-        "abogado": abogado,
-        "cliente": cliente,
-        "estado": estado,
-        "tag": tag,
-    }.items() if v is not None}
+    params = {
+        k: v for k, v in {
+            "q": q,
+            "abogado": abogado,
+            "cliente": cliente,
+            "estado": estado,
+            "tag": tag,
+        }.items() if v is not None
+    }
     return buscar_causas_openclaw(params)
 
 
@@ -1272,10 +1222,16 @@ def causas_sugerir_whatsapp(req: WhatsAppCausaRequest):
 @app.post("/v1/chat/completions")
 def openai_chat_completions(req: OpenAIChatCompletionRequest):
     try:
-        mensajes_usuario = [m for m in req.messages if m.role == "user" and isinstance(m.content, str)]
+        mensajes_usuario = [
+            m for m in req.messages
+            if m.role == "user" and isinstance(m.content, str)
+        ]
 
         if not mensajes_usuario:
-            raise HTTPException(status_code=400, detail="No se encontró un mensaje de usuario válido.")
+            raise HTTPException(
+                status_code=400,
+                detail="No se encontró un mensaje de usuario válido.",
+            )
 
         pregunta = mensajes_usuario[-1].content
         agente, respuesta, fuentes = enrutar_consulta(
@@ -1286,7 +1242,7 @@ def openai_chat_completions(req: OpenAIChatCompletionRequest):
         contenido = (respuesta or "").strip()
 
         if agente == "memoria" and not contenido and not fuentes:
-            respuesta, fuentes = aa.agente_asistente(
+            respuesta, fuentes = consultar_operativa(
                 pregunta,
                 n_resultados=DEFAULT_N_RESULTADOS,
             )
@@ -1321,10 +1277,10 @@ def openai_chat_completions(req: OpenAIChatCompletionRequest):
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Error en endpoint OpenAI-compatible: {str(e)}",
+            detail=f"Error en endpoint OpenAI-compatible: {str(exc)}",
         )
 
 

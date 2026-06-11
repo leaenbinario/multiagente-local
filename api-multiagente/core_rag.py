@@ -8,10 +8,8 @@ import os
 
 import chromadb
 import ollama
+import requests
 from dotenv import load_dotenv
-from chromadb.utils.embedding_functions.ollama_embedding_function import (
-    OllamaEmbeddingFunction,
-)
 
 load_dotenv()
 
@@ -114,26 +112,58 @@ def get_operativa_config(system_prompt: str) -> RagConfig:
 # CLIENTES CACHEADOS
 # =========================
 
-@lru_cache(maxsize=8)
-def _embedding_fn():
-    return OllamaEmbeddingFunction(
-        url=OLLAMA_BASE_URL,
-        model_name=EMBEDDING_MODEL,
-    )
-
-
 @lru_cache(maxsize=4)
 def _ollama_client():
     return ollama.Client(host=OLLAMA_BASE_URL)
 
 
+@lru_cache(maxsize=1)
+def _chroma_client():
+    return chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+
+
 @lru_cache(maxsize=32)
 def _collection(collection_name: str):
-    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    return client.get_or_create_collection(
-        name=collection_name,
-        embedding_function=_embedding_fn(),
+    client = _chroma_client()
+
+    try:
+        return client.get_collection(name=collection_name)
+    except Exception:
+        return client.get_or_create_collection(name=collection_name)
+
+
+# =========================
+# EMBEDDINGS / RECUPERACIÓN
+# =========================
+
+def request_embedding(texto: str) -> List[float]:
+    resp = requests.post(
+        f"{OLLAMA_BASE_URL}/api/embeddings",
+        json={"model": EMBEDDING_MODEL, "prompt": texto},
+        timeout=120,
     )
+    resp.raise_for_status()
+    data = resp.json()
+    emb = data.get("embedding")
+    if not emb:
+        raise ValueError("No se recibió embedding desde Ollama.")
+    return emb
+
+
+def recuperar_contexto(
+    consulta: str,
+    cfg: RagConfig,
+    n_resultados: int = 4,
+):
+    collection = _collection(cfg.collection_name)
+    query_embedding = request_embedding(consulta)
+
+    resultados = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_resultados,
+        include=["documents", "metadatas", "distances"],
+    )
+    return resultados
 
 
 # =========================
@@ -188,12 +218,12 @@ def responder_con_rag(
     n_resultados: int | None = None,
 ) -> Tuple[str, List[str]]:
     try:
-        collection = _collection(cfg.collection_name)
         k = cfg.n_results_default if n_resultados is None else n_resultados
 
-        resultados = collection.query(
-            query_texts=[consulta],
-            n_results=k,
+        resultados = recuperar_contexto(
+            consulta=consulta,
+            cfg=cfg,
+            n_resultados=k,
         )
 
         documentos = resultados.get("documents", [[]])[0] or []
