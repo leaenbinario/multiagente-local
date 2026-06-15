@@ -1,4 +1,5 @@
 from typing import List, Tuple
+from functools import lru_cache
 import os
 
 import ollama
@@ -24,7 +25,11 @@ OPERATIVA_SYSTEM_PROMPT = (
 )
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-ollama_client = ollama.Client(host=OLLAMA_BASE_URL)
+
+
+@lru_cache(maxsize=1)
+def _ollama_client():
+    return ollama.Client(host=OLLAMA_BASE_URL)
 
 
 def _parece_sin_contexto(respuesta: str, fuentes: List[str]) -> bool:
@@ -84,7 +89,7 @@ def _respuesta_operativa_general(consulta: str) -> Tuple[str, List[str]]:
         "que no fueron proporcionados en la consulta."
     )
 
-    respuesta = ollama_client.chat(
+    respuesta = _ollama_client().chat(
         model=cfg.model,
         options={
             "temperature": cfg.temperature,

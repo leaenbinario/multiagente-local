@@ -1,26 +1,47 @@
+# Secrets and env
 .env
 *.env
+.envrc
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
-*.log
+*.pyd
+.pytest_cache/
+.mypy_cache/
 .venv/
 venv/
-.envrc
 
-volumes/
-shared-data/
-data/
-transcripciones/
-procesados/
-documentos/
-causas/
-.chroma/
-*.sqlite3
-*.db
+# Logs and temp
+*.log
+*.tmp
+*.bak
+*.swp
+*.save
 
+# Editors and OS
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
 
+# Local persistent data
+volumes/
+shared-data/
+backups/
+data/
+documentos/
+causas/
+transcripciones/
+procesados/
+.chroma/
+
+# Databases
+*.sqlite3
+*.db
+
+# Generated local artifacts
 output/
+dist/
+build/

@@ -6,12 +6,10 @@ import email
 from email import policy
 import hashlib
 import logging
+import requests
 
 import fitz
 import chromadb
-from chromadb.utils.embedding_functions.ollama_embedding_function import (
-    OllamaEmbeddingFunction,
-)
 
 from docx import Document
 from odf import text, teletype
@@ -28,10 +26,7 @@ import pytesseract
 
 logger = logging.getLogger("ingesta_forense")
 if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -59,9 +54,33 @@ EXT_PPTX = {".pptx"}
 CHROMA_HOST = os.getenv("CHROMA_HOST", "chromadb")
 CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text:latest")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "300"))
+OLLAMA_EMBED_URL = os.getenv("OLLAMA_EMBED_URL", f"{OLLAMA_BASE_URL}/api/embeddings")
+EMBED_MODEL = os.getenv("EMBEDDING_MODEL", os.getenv("EMBED_MODEL", "nomic-embed-text:latest"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "10"))
+
+
+def embed_texts(texts):
+    embeddings = []
+    for text in texts:
+        r = requests.post(
+            OLLAMA_EMBED_URL,
+            json={"model": EMBED_MODEL, "prompt": text},
+            timeout=120,
+        )
+        r.raise_for_status()
+        data = r.json()
+        embeddings.append(data["embedding"])
+    return embeddings
+
+
+def safe_str(v, limit=None):
+    if v is None:
+        s = ""
+    elif isinstance(v, bool):
+        s = "true" if v else "false"
+    else:
+        s = str(v)
+    return s[:limit] if limit else s
 
 
 def leer_txt(path: Path) -> str:
@@ -398,15 +417,7 @@ def chunk_text(texto: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP)
 
 def get_collection():
     client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    embedding_fn = OllamaEmbeddingFunction(
-        url=OLLAMA_BASE_URL,
-        model_name=EMBED_MODEL,
-        timeout=OLLAMA_TIMEOUT,
-    )
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embedding_fn,
-    )
+    return client.get_or_create_collection(name=COLLECTION_NAME)
 
 
 def hash_text(s: str) -> str:
@@ -421,7 +432,11 @@ def existing_hashes_en_batch(collection, hashes):
             res = collection.get(where={"hash": h}, include=["metadatas"])
             metas = res.get("metadatas") or []
             for md in metas:
-                if md and md.get("hash") == h:
+                if isinstance(md, list):
+                    for sub in md:
+                        if sub and sub.get("hash") == h:
+                            existentes.add(h)
+                elif md and md.get("hash") == h:
                     existentes.add(h)
         except Exception as e:
             print(f"  [ADVERTENCIA] No se pudo verificar hash {h}: {e}")
@@ -438,16 +453,32 @@ def build_base_metadata(path: Path, texto: str, total_chunks: int):
     issuing_body = infer_issuing_body(texto)
 
     return {
-        "source": path.name,
-        "title": title[:240],
-        "document_type": document_type[:80],
-        "legal_reference": legal_reference[:120],
-        "year": year[:4],
-        "jurisdiction": jurisdiction[:120],
-        "issuing_body": issuing_body[:180],
-        "doc_type": path.suffix.lower().lstrip("."),
-        "total_chunks": total_chunks,
+        "source": safe_str(path.name, 240),
+        "title": safe_str(title, 240),
+        "document_type": safe_str(document_type, 80),
+        "legal_reference": safe_str(legal_reference, 120),
+        "year": safe_str(year, 4),
+        "jurisdiction": safe_str(jurisdiction, 120),
+        "issuing_body": safe_str(issuing_body, 180),
+        "doc_type": safe_str(path.suffix.lower().lstrip("."), 20),
+        "total_chunks": int(total_chunks),
     }
+
+
+def prepare_metadata(md):
+    out = {}
+    for k, v in md.items():
+        if isinstance(v, bool):
+            out[k] = "true" if v else "false"
+        elif isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, float):
+            out[k] = v
+        elif v is None:
+            out[k] = ""
+        else:
+            out[k] = str(v)
+    return out
 
 
 def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
@@ -493,15 +524,16 @@ def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
 
             insertados_total = 0
             duplicados_total = 0
+            hubo_error = False
 
             summary_hash = hash_text(summary)
-            summary_meta = {
+            summary_meta = prepare_metadata({
                 **meta_base,
                 "chunk_index": -1,
                 "order_in_doc": 0,
                 "is_summary": True,
                 "hash": summary_hash,
-            }
+            })
 
             if summary_hash not in existing_hashes_en_batch(collection, [summary_hash]):
                 try:
@@ -509,10 +541,12 @@ def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
                         documents=[summary],
                         ids=[f"{path.name}_summary"],
                         metadatas=[summary_meta],
+                        embeddings=embed_texts([summary]),
                     )
                     insertados_total += 1
                     print("  Summary insertado.")
                 except Exception as e:
+                    hubo_error = True
                     print(f"  [ERROR] Falló inserción de summary para {path.name}: {e}")
             else:
                 duplicados_total += 1
@@ -542,13 +576,13 @@ def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
                     batch_ids.append(f"{path.name}_chunk_{i}")
                     batch_docs.append(contextualizado)
                     batch_metadatas.append(
-                        {
+                        prepare_metadata({
                             **meta_base,
                             "chunk_index": i,
                             "order_in_doc": i + 1,
                             "is_summary": False,
                             "hash": h,
-                        }
+                        })
                     )
 
                 existing_hashes = existing_hashes_en_batch(collection, batch_hashes)
@@ -574,10 +608,12 @@ def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
                         documents=filtered_docs,
                         ids=filtered_ids,
                         metadatas=filtered_metas,
+                        embeddings=embed_texts(filtered_docs),
                     )
                     insertados_total += len(filtered_docs)
                     print(f"  Batch {start}-{end - 1}: insertados={len(filtered_docs)}")
                 except Exception as e:
+                    hubo_error = True
                     print(f"  [ERROR] Falló batch {start}-{end - 1} de {path.name}: {e}")
                     continue
 
@@ -585,6 +621,10 @@ def ingestar_carpeta(carpeta_docs: Path, carpeta_procesados: Path):
                 f"  Resumen: totales={total_chunks + 1} | "
                 f"insertados={insertados_total} | duplicados={duplicados_total}"
             )
+
+            if hubo_error or insertados_total == 0:
+                print(f"  [INFO] No se mueve a procesados porque hubo errores o no se insertó nada: {path.name}")
+                continue
 
             destino = carpeta_procesados / path.name
             shutil.move(str(path), destino)
