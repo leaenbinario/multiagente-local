@@ -1,15 +1,14 @@
+import time
 from typing import Any, List, Optional
 from uuid import uuid4
-import time
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config.settings import settings
-from app.services.routing_service import enrutar_consulta
+from app.services.routing_service import procesar_consulta_enrutada
 
-router = APIRouter()
+router = APIRouter(tags=["openai-compat"])
 
 
 class Message(BaseModel):
@@ -24,6 +23,19 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = None
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
+
+
+def extraer_ultimo_mensaje_usuario(messages: List[Message]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and isinstance(message.content, str):
+            contenido = message.content.strip()
+            if contenido:
+                return contenido
+
+    raise HTTPException(
+        status_code=400,
+        detail="No se encontró un mensaje de usuario válido.",
+    )
 
 
 @router.get("/v1/models")
@@ -49,28 +61,10 @@ def list_models_alias():
 @router.post("/v1/chat/completions")
 def chat_completions(payload: ChatCompletionRequest):
     try:
-        mensajes_usuario = [
-            m for m in payload.messages
-            if m.role == "user" and isinstance(m.content, str)
-        ]
+        user_message = extraer_ultimo_mensaje_usuario(payload.messages)
+        resultado = procesar_consulta_enrutada(user_message)
 
-        if not mensajes_usuario:
-            raise HTTPException(
-                status_code=400,
-                detail="No se encontró un mensaje de usuario válido.",
-            )
-
-        user_message = mensajes_usuario[-1].content
-        resultado = enrutar_consulta(user_message)
-
-        if isinstance(resultado, tuple) and len(resultado) == 3:
-            agente, respuesta, fuentes = resultado
-        else:
-            agente = str(resultado)
-            respuesta = ""
-            fuentes = []
-
-        contenido = (respuesta or "").strip()
+        contenido = str(resultado.get("respuesta", "")).strip()
 
         return {
             "id": f"chatcmpl-{uuid4().hex}",
@@ -92,10 +86,6 @@ def chat_completions(payload: ChatCompletionRequest):
                 "completion_tokens": 0,
                 "total_tokens": 0,
             },
-            "debug": {
-                "destino": agente,
-                "fuentes": fuentes,
-            },
         }
 
     except HTTPException:
@@ -110,13 +100,3 @@ def chat_completions(payload: ChatCompletionRequest):
 @router.post("/chat/completions")
 def chat_completions_alias(payload: ChatCompletionRequest):
     return chat_completions(payload)
-
-
-@router.options("/models")
-async def options_models():
-    return JSONResponse(content={}, headers={"Access-Control-Allow-Origin": "*"})
-
-
-@router.options("/chat/completions")
-async def options_chat_completions():
-    return JSONResponse(content={}, headers={"Access-Control-Allow-Origin": "*"})

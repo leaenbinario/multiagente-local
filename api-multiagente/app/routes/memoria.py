@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 from app.services.memoria_service import guardar_memoria, buscar_memoria
 
-router = APIRouter()
+router = APIRouter(tags=["memoria"])
 
 
 class MemoriaGuardarRequest(BaseModel):
@@ -12,22 +12,23 @@ class MemoriaGuardarRequest(BaseModel):
 
 
 class MemoriaBuscarRequest(BaseModel):
-    texto: str
+    consulta: str
 
 
-@router.post("/memoriaguardar")
-def memoriaguardar(payload: MemoriaGuardarRequest):
+@router.post("/memoria/guardar")
+def memoria_guardar(payload: MemoriaGuardarRequest):
     item = guardar_memoria(payload.clave, payload.contenido)
     return {
         "status": "ok",
-        "guardado": item
+        "guardado": item,
     }
 
 
-@router.post("/memoriabuscar")
-def memoriabuscar(payload: MemoriaBuscarRequest):
-    resultados = buscar_memoria(payload.texto)
+@router.post("/memoria/buscar")
+def memoria_buscar(payload: MemoriaBuscarRequest):
+    respuesta, fuentes = buscar_memoria(payload.consulta)
     return {
         "status": "ok",
-        "resultados": resultados
+        "respuesta": respuesta,
+        "fuentes": fuentes,
     }

@@ -1,31 +1,22 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.agents.asistente import consultar_asistente
-from app.agents.contador import consultar_contador
-from app.agents.forense import consultar_forense
-from app.services.routing_service import enrutar_consulta
+from app.services.routing_service import procesar_consulta_enrutada
 
-router = APIRouter()
+router = APIRouter(tags=["orquestador"])
 
 
 class OrquestadorRequest(BaseModel):
     pregunta: str
 
 
-@router.post("/orquestadorconsulta")
+@router.post("/orquestador/consulta")
 def orquestador_consulta(payload: OrquestadorRequest):
-    destino = enrutar_consulta(payload.pregunta)
-
-    if destino == "forense":
-        resultado = consultar_forense(payload.pregunta)
-    elif destino == "contador":
-        resultado = consultar_contador(payload.pregunta)
-    else:
-        resultado = consultar_asistente(payload.pregunta)
+    resultado = procesar_consulta_enrutada(payload.pregunta)
 
     return {
         "pregunta": payload.pregunta,
-        "destino": destino,
-        "resultado": resultado
+        "destino": resultado.get("destino"),
+        "respuesta": resultado.get("respuesta"),
+        "fuentes": resultado.get("fuentes", []),
     }
