@@ -26,22 +26,44 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Local persistent data
+# Local persistent data (global)
 volumes/
-shared-data/
 backups/
-data/
+output/
+dist/
+build/
+.chroma/
+*.sqlite3
+*.db
+
+# --- Multiagente específico ---
+
+# Datos internos de api-multiagente
+/api-multiagente/data/logs/
+/api-multiagente/data/memoria.json
+/api-multiagente/data/memoria_usuario.json
+
+# shared-data: mantener estructura pero no versionar datos reales
+/shared-data/causas/
+/shared-data/documentos_forenses/
+/shared-data/documentos_asistente/
+/shared-data/documentos_contables/
+/shared-data/entradas/
+/shared-data/consolidar.sh
+
+# Si en algún momento agregás más áreas de RAG:
+/shared-data/procesados_forense/
+/shared-data/procesados_contables/
+/shared-data/procesados_asistente/
+
+/shared-data/transcripciones/
+/shared-data/tmp/
+
+# Carpetas sueltas que no deberían ir al repo
 documentos/
 causas/
 transcripciones/
 procesados/
-.chroma/
 
-# Databases
-*.sqlite3
-*.db
-
-# Generated local artifacts
-output/
-dist/
-build/
+# Docker
+*.pid
